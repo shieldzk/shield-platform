@@ -1,0 +1,12 @@
+# Local services for development: `docker compose up -d`
+services:
+  mongo:
+    # Not mongo:8 (8.3.x): it refuses to start on Linux kernels >= 6.19 (SERVER-121912).
+    image: mongo:8.2
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+
+volumes:
+  mongo-data:

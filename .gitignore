@@ -6,3 +6,19 @@ dist/
 build/
 coverage/
 .DS_Store
+
+# turbo
+.turbo
+
+# React Router
+.react-router
+
+# typescript
+*.tsbuildinfo
+
+# misc
+*.pem
+
+# debug
+npm-debug.log*
+pnpm-debug.log*
