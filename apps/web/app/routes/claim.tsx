@@ -23,7 +23,11 @@ import {
   TESTNET_CONFIG,
   type ClaimProofOutput,
 } from "@workspace/sdk"
-import { ShieldVaultClient } from "@workspace/sdk/chain"
+import {
+  ShieldVaultClient,
+  submitTransaction,
+  type SubmitStage,
+} from "@workspace/sdk/chain"
 import { useWallet } from "../context/wallet-context"
 import { WalletConnectButton } from "../components/wallet-button"
 
@@ -81,6 +85,7 @@ export default function ClaimPage() {
 
   // Withdrawal / settlement states
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [submitStage, setSubmitStage] = useState<SubmitStage | null>(null)
   const [txHash, setTxHash] = useState<string | null>(null)
 
   // Auto-fill connected wallet if recipient was unchanged default
@@ -151,8 +156,8 @@ export default function ClaimPage() {
     }
   }
 
-  async function handleSimulateWithdraw() {
-    if (!proofOutput) return
+  async function handleWithdraw() {
+    if (!proofOutput || !walletAddress) return
     setError(null)
     setIsSubmitting(true)
     try {
@@ -168,7 +173,10 @@ export default function ClaimPage() {
         : nullifierHash
       const nullifierBigInt = BigInt("0x" + cleanNullifier)
 
+      // The connected wallet submits the claim and pays the fee. The proof binds the
+      // payout to `recipient`, so this needn't be the recipient's own wallet.
       const tx = await client.buildWithdraw({
+        source: walletAddress,
         batchId: BigInt(batchId),
         amount: BigInt(amount),
         recipient,
@@ -176,26 +184,21 @@ export default function ClaimPage() {
         proof: proofOutput.proofBytes,
       })
 
-      // If user has Freighter connected and matching the recipient, optionally prompt to sign
-      if (isWalletConnected && walletAddress === recipient) {
-        try {
-          const xdr = tx.toXDR()
-          await signTx(xdr)
-          setTxHash("Signed via Freighter & verified on Stellar Testnet Vault")
-          setStep(4)
-          return
-        } catch (signErr: any) {
-          console.warn("Wallet signing skipped or cancelled, using simulated execution:", signErr)
-        }
-      }
-
-      setTxHash("Simulated successfully on Stellar Testnet RPC (Vault verified proof and nullifier)")
+      const { hash } = await submitTransaction(tx, {
+        signTransaction: async (xdr) => ({
+          signedTxXdr: await signTx(xdr),
+          signerAddress: walletAddress,
+        }),
+        onStage: (stage) => setSubmitStage(stage),
+      })
+      setTxHash(hash)
       setStep(4)
     } catch (err: any) {
       console.error("Withdrawal error:", err)
-      setError(err?.message || "Withdrawal failed on-chain")
+      setError(err?.message || "Withdrawal failed")
     } finally {
       setIsSubmitting(false)
+      setSubmitStage(null)
     }
   }
 
@@ -599,25 +602,33 @@ export default function ClaimPage() {
                 >
                   Back
                 </Button>
-                <Button
-                  disabled={isSubmitting}
-                  onClick={handleSimulateWithdraw}
-                  className="bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-semibold px-5 flex items-center gap-2 cursor-pointer disabled:opacity-50"
-                >
-                  {isSubmitting ? (
-                    <>
-                      <ArrowsClockwise size={16} className="animate-spin" />
-                      Submitting to Testnet...
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle size={16} />
-                      {isWalletConnected && walletAddress === recipient
-                        ? "Sign with Freighter & Claim"
-                        : "Verify & Submit Claim (withdraw)"}
-                    </>
-                  )}
-                </Button>
+                {isWalletConnected ? (
+                  <Button
+                    disabled={isSubmitting}
+                    onClick={handleWithdraw}
+                    className="bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-semibold px-5 flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                  >
+                    {isSubmitting ? (
+                      <>
+                        <ArrowsClockwise size={16} className="animate-spin" />
+                        {submitStage === "signing"
+                          ? "Confirm in your wallet..."
+                          : submitStage === "confirming"
+                            ? "Waiting for confirmation..."
+                            : "Sending to Testnet..."}
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle size={16} />
+                        {walletAddress === recipient
+                          ? "Sign with Freighter & Claim"
+                          : "Claim (your wallet pays the fee)"}
+                      </>
+                    )}
+                  </Button>
+                ) : (
+                  <WalletConnectButton />
+                )}
               </div>
             </div>
           )}
@@ -631,16 +642,16 @@ export default function ClaimPage() {
 
               <div>
                 <h2 className="text-xl font-bold text-white mb-1">
-                  Claim Successfully Verified!
+                  Claim Paid Out
                 </h2>
                 <p className="text-xs text-neutral-400 max-w-md mx-auto">
-                  The on-chain verifier confirmed the Merkle inclusion proof and nullifier derivation.
-                  Funds have been allocated to your recipient address.
+                  The vault verified your proof, recorded the nullifier so this allocation
+                  can't be claimed again, and sent {amount} units to the recipient address.
                 </p>
               </div>
 
               <div className="p-4 rounded-xl bg-neutral-950 border border-neutral-800 text-xs text-left max-w-lg mx-auto space-y-2">
-                <div className="text-neutral-400">Transaction Status:</div>
+                <div className="text-neutral-400">Transaction:</div>
                 <div className="font-mono text-emerald-400 text-xs break-all">
                   {txHash}
                 </div>
@@ -663,7 +674,7 @@ export default function ClaimPage() {
                   Start Another Claim
                 </Button>
                 <a
-                  href={`https://stellar.expert/explorer/testnet/contract/${TESTNET_CONFIG.contracts.vault}`}
+                  href={`https://stellar.expert/explorer/testnet/tx/${txHash}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-semibold px-4 py-2 rounded-lg text-sm inline-flex items-center gap-1.5 transition-colors cursor-pointer"
