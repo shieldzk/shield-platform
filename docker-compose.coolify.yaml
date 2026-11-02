@@ -1,0 +1,63 @@
+# Production stack for Coolify: MongoDB, the API and the web app.
+# In Coolify: Public Git Repository -> build pack "Docker Compose" -> this file.
+# Set the domains on the api (port 4000) and web (port 3000) services, and the
+# variables below in Coolify's Environment Variables tab.
+services:
+  mongo:
+    # Not mongo:8 (8.3.x): it refuses to start on Linux kernels >= 6.19 (SERVER-121912).
+    image: mongo:8.2
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+    expose:
+      - "4000"
+    environment:
+      NODE_ENV: production
+      PORT: "4000"
+      LOG_LEVEL: info
+      MONGODB_URI: mongodb://mongo:27017/shieldzk
+      # The web app's public URL, e.g. https://shield.example.com
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      # openssl rand -base64 32
+      CLAIM_DATA_KEY: ${CLAIM_DATA_KEY}
+      STELLAR_RPC_URL: ${STELLAR_RPC_URL:-https://soroban-testnet.stellar.org}
+      STELLAR_NETWORK_PASSPHRASE: ${STELLAR_NETWORK_PASSPHRASE:-Test SDF Network ; September 2015}
+      VAULT_CONTRACT_ID: ${VAULT_CONTRACT_ID:-CBAL4VIZI6MUKVAMYMWQW3VHB3Y7X7A6LAYZTWSKJCHYNFCXF2VC4MVP}
+    volumes:
+      # Optional: shield-contracts' circuits copied to the server, to prove batches.
+      # Empty, the API runs with proving off.
+      - /opt/shieldzk/circuits:/circuits:ro
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        # The API's public URL, e.g. https://api.shield.example.com
+        VITE_API_URL: ${VITE_API_URL}
+        VITE_TOKEN_CONTRACT_ID: ${VITE_TOKEN_CONTRACT_ID:-CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC}
+    restart: unless-stopped
+    depends_on:
+      - api
+    expose:
+      - "3000"
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+
+volumes:
+  mongo-data:
